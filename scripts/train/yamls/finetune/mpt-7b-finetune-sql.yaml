@@ -1,0 +1,128 @@
+max_seq_len: 2047
+global_seed: 15
+autoresume: true
+save_folder: /ml/models/first-sql
+run_name: my-first-test-run
+
+model:
+  name: hf_causal_lm
+  pretrained: true
+  pretrained_model_name_or_path: mosaicml/mpt-7b
+  config_overrides:
+    attn_config:
+      attn_impl: triton
+      # Set this to `true` if using `train_loader.dataset.packing_ratio` below
+      attn_uses_sequence_id: false
+
+# Tokenizer
+tokenizer:
+  name: mosaicml/mpt-7b
+  kwargs:
+    model_max_length: ${max_seq_len}
+
+
+# Dataloaders
+train_loader:
+  name: finetuning
+  dataset:
+    hf_name: json
+    hf_kwargs:
+      data_files: /ml/natura-suggest/datasets/train-sql-basic.json
+    max_seq_len: ${max_seq_len}
+    split: train
+    allow_pad_trimming: false
+    decoder_only_format: true
+    # # Use `python llmfoundry/data/packing.py --yaml-path /path/to/this/yaml/ ...`
+    # # to profile this run's optimal packing_ratio as it depends on GPU count,
+    # # batch size, sequence length
+    # packing_ratio:
+    shuffle: true
+  drop_last: true
+  num_workers: 1
+  pin_memory: false
+  prefetch_factor: 2
+  persistent_workers: true
+  timeout: 0
+
+eval_loader:
+  name: finetuning
+  dataset:
+    split: train
+    hf_name: json
+    hf_kwargs:
+      data_files: /ml/natura-suggest/datasets/dev-sql-basic.json
+    max_seq_len: ${max_seq_len}
+    allow_pad_trimming: false
+    decoder_only_format: true
+    # packing_ratio:
+    shuffle: true
+  drop_last: true
+  num_workers: 1
+  pin_memory: false
+  prefetch_factor: 2
+  persistent_workers: true
+  timeout: 0
+
+# Optimization
+scheduler:
+  name: linear_decay_with_warmup  # linear no warmup is HF default which dolly used
+  t_warmup: 50ba  # add some warmup though, seems to help with MPT
+  alpha_f: 0
+
+optimizer:
+  # Based on Dolly
+  name: decoupled_adamw
+  lr: 5.0e-6
+  betas:
+  - 0.9
+  - 0.999
+  eps: 1.0e-8
+  weight_decay: 0
+
+algorithms:
+  gradient_clipping:
+    clipping_type: norm
+    clipping_threshold: 1.0
+
+max_duration: 2ep  # 2-3 epochs seems like the sweet spot
+#eval_interval: 1ep
+eval_interval: 1
+# eval_subset_num_batches: -1
+#eval_first: true
+global_train_batch_size: 24  # somewhere in the 6-8 * numgpus range seems good
+
+# System
+seed: ${global_seed}
+#device_eval_batch_size: 8
+device_train_microbatch_size: 8
+# device_train_microbatch_size: auto
+precision: amp_bf16
+
+# FSDP
+fsdp_config:
+  sharding_strategy: FULL_SHARD
+  mixed_precision: PURE
+  activation_checkpointing: true
+  activation_checkpointing_reentrant: false
+  activation_cpu_offload: false
+  limit_all_gathers: true
+  verbose: true
+
+# Logging
+progress_bar: true
+log_to_console: false
+console_log_interval: 1ba
+
+callbacks:
+  speed_monitor:
+    window_size: 10
+  lr_monitor: {}
+  memory_monitor: {}
+  runtime_estimator: {}
+
+# loggers:
+#   wandb: {}
+
+# Checkpoint to local filesystem or remote object store
+save_interval: 50ba
+save_num_checkpoints_to_keep: 1  # Important, this cleans up checkpoints saved to DISK
